@@ -5,6 +5,10 @@ import Link from "next/link";
 
 export default function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const network =
+    (process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "testnet").toLowerCase();
+  const isMainnet = network === "public" || network === "mainnet";
+  const networkLabel = isMainnet ? "MAINNET" : "TESTNET";
 
   const toggleMenu = () => {
     setIsMenuOpen(!isMenuOpen);
@@ -28,41 +32,55 @@ export default function Navbar() {
             </span>
           </Link>
 
-          {/* Desktop Navigation */}
-          <div className="hidden items-center gap-8 md:flex">
-            {navLinks.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="text-sm text-slate-300 transition-colors hover:text-white"
-              >
-                {link.label}
-              </Link>
-            ))}
-          </div>
+          <div className="flex items-center gap-4">
+            {/* Desktop Navigation */}
+            <div className="hidden items-center gap-8 md:flex">
+              {navLinks.map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="text-sm text-slate-300 transition-colors hover:text-white"
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
 
-          {/* Mobile Menu Button */}
-          <button
-            onClick={toggleMenu}
-            className="flex flex-col gap-1.5 md:hidden"
-            aria-label="Toggle menu"
-          >
+            {/* Network Badge */}
             <span
-              className={`block h-0.5 w-6 bg-white transition-all ${
-                isMenuOpen ? "translate-y-2 rotate-45" : ""
+              aria-label={`Network: ${networkLabel}`}
+              className={`rounded-full border px-3 py-1 text-[10px] font-semibold tracking-[0.2em] ${
+                isMainnet
+                  ? "border-green-500/40 bg-green-500/15 text-green-300"
+                  : "border-yellow-500/50 bg-yellow-500/15 text-yellow-300"
               }`}
-            ></span>
-            <span
-              className={`block h-0.5 w-6 bg-white transition-all ${
-                isMenuOpen ? "opacity-0" : ""
-              }`}
-            ></span>
-            <span
-              className={`block h-0.5 w-6 bg-white transition-all ${
-                isMenuOpen ? "-translate-y-2 -rotate-45" : ""
-              }`}
-            ></span>
-          </button>
+            >
+              {networkLabel}
+            </span>
+
+            {/* Mobile Menu Button */}
+            <button
+              onClick={toggleMenu}
+              className="flex flex-col gap-1.5 md:hidden"
+              aria-label="Toggle menu"
+            >
+              <span
+                className={`block h-0.5 w-6 bg-white transition-all ${
+                  isMenuOpen ? "translate-y-2 rotate-45" : ""
+                }`}
+              ></span>
+              <span
+                className={`block h-0.5 w-6 bg-white transition-all ${
+                  isMenuOpen ? "opacity-0" : ""
+                }`}
+              ></span>
+              <span
+                className={`block h-0.5 w-6 bg-white transition-all ${
+                  isMenuOpen ? "-translate-y-2 -rotate-45" : ""
+                }`}
+              ></span>
+            </button>
+          </div>
         </div>
 
         {/* Mobile Menu */}
