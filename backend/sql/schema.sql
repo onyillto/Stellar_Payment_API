@@ -28,12 +28,15 @@ create table if not exists payments (
   webhook_url text,
   status text not null default 'pending',
   tx_id text,
+  completion_duration_seconds integer,
   metadata jsonb,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  deleted_at timestamptz
 );
 
 create index if not exists payments_status_idx on payments(status);
 create index if not exists payments_merchant_idx on payments(merchant_id);
+create index if not exists payments_deleted_at_idx on payments(deleted_at);
 
 create table if not exists webhook_delivery_logs (
   id uuid primary key default gen_random_uuid(),

@@ -8,6 +8,49 @@ import {
 import { resolveBrandingConfig } from "../lib/branding.js";
 import { sendWebhook } from "../lib/webhooks.js";
 import { getPayloadForVersion } from "../webhooks/resolver.js";
+import { sendReceiptEmail } from "../lib/email.js";
+import { renderReceiptEmail } from "../lib/email-templates.js";
+import {
+  connectRedisClient,
+  getCachedPayment,
+  setCachedPayment,
+  invalidatePaymentCache,
+} from "../lib/redis.js";
+import {
+  paymentCreatedCounter,
+  paymentConfirmedCounter,
+  paymentConfirmationLatency,
+  paymentFailedCounter,
+} from "../lib/metrics.js";
+
+function applyPaymentFilters(query, filters) {
+  const { status, asset, date_from: dateFrom, date_to: dateTo, search } = filters;
+
+  if (typeof status === "string" && status.length > 0) {
+    query = query.eq("status", status);
+  }
+
+  if (typeof asset === "string" && asset.length > 0) {
+    query = query.eq("asset", asset);
+  }
+
+  if (typeof dateFrom === "string" && dateFrom.length > 0) {
+    query = query.gte("created_at", `${dateFrom}T00:00:00.000Z`);
+  }
+
+  if (typeof dateTo === "string" && dateTo.length > 0) {
+    query = query.lte("created_at", `${dateTo}T23:59:59.999Z`);
+  }
+
+  if (typeof search === "string" && search.trim().length > 0) {
+    const term = search.trim().replaceAll(",", "\\,");
+    query = query.or(
+      `id.ilike.%${term}%,description.ilike.%${term}%,recipient.ilike.%${term}%`
+    );
+  }
+
+  return query;
+}
 
 export const paymentService = {
   async createPaymentSession(merchant, body) {
@@ -17,6 +60,7 @@ export const paymentService = {
       const assetLimits = limits[body.asset];
       if (assetLimits) {
         if (assetLimits.min !== undefined && body.amount < assetLimits.min) {
+          paymentFailedCounter.inc({ asset: body.asset, reason: "below_min" });
           const error = new Error(`Amount is below the minimum for ${body.asset}`);
           error.status = 400;
           error.details = {
@@ -26,6 +70,7 @@ export const paymentService = {
           throw error;
         }
         if (assetLimits.max !== undefined && body.amount > assetLimits.max) {
+          paymentFailedCounter.inc({ asset: body.asset, reason: "above_max" });
           const error = new Error(`Amount exceeds the maximum for ${body.asset}`);
           error.status = 400;
           error.details = {
@@ -41,6 +86,7 @@ export const paymentService = {
     const allowedIssuers = merchant.allowed_issuers;
     if (Array.isArray(allowedIssuers) && allowedIssuers.length > 0) {
       if (!body.asset_issuer || !allowedIssuers.includes(body.asset_issuer)) {
+        paymentFailedCounter.inc({ asset: body.asset, reason: "invalid_issuer" });
         const error = new Error("asset_issuer is not in the merchant's list of allowed issuers");
         error.status = 400;
         throw error;
@@ -84,6 +130,9 @@ export const paymentService = {
       throw insertError;
     }
 
+    // Record metric for payment creation
+    paymentCreatedCounter.inc({ asset: body.asset });
+
     return {
       payment_id: paymentId,
       payment_link: paymentLink,
@@ -93,6 +142,13 @@ export const paymentService = {
   },
 
   async getPaymentStatus(paymentId, merchantId = null) {
+    // --- Redis read-through cache ---
+    const redis = await connectRedisClient();
+    const cached = await getCachedPayment(redis, paymentId);
+    if (cached) {
+      return { payment: cached };
+    }
+
     let query = supabase
       .from("payments")
       .select(
@@ -103,7 +159,10 @@ export const paymentService = {
       query = query.eq("merchant_id", merchantId);
     }
 
-    const { data, error } = await query.eq("id", paymentId).maybeSingle();
+    const { data, error } = await query
+      .eq("id", paymentId)
+      .is("deleted_at", null)
+      .maybeSingle();
 
     if (error) {
       error.status = 500;
@@ -126,6 +185,9 @@ export const paymentService = {
     };
     delete response.merchants;
 
+    // Cache the result to absorb polling bursts
+    await setCachedPayment(redis, paymentId, response);
+
     return { payment: response };
   },
 
@@ -133,14 +195,17 @@ export const paymentService = {
     let query = supabase
       .from("payments")
       .select(
-        "id, merchant_id, amount, asset, asset_issuer, recipient, status, tx_id, memo, memo_type, webhook_url, merchants(webhook_secret, webhook_version)"
+        "id, merchant_id, amount, asset, asset_issuer, recipient, status, tx_id, memo, memo_type, webhook_url, created_at, merchants(webhook_secret, webhook_version, notification_email, email)"
       );
 
     if (merchantId) {
       query = query.eq("merchant_id", merchantId);
     }
 
-    const { data, error } = await query.eq("id", paymentId).maybeSingle();
+    const { data, error } = await query
+      .eq("id", paymentId)
+      .is("deleted_at", null)
+      .maybeSingle();
 
     if (error) {
       error.status = 500;
@@ -174,15 +239,32 @@ export const paymentService = {
       return { status: "pending" };
     }
 
+    // Calculate latency from creation to confirmation
+    const createdAt = new Date(data.created_at);
+    const now = new Date();
+    const latencySeconds = (now - createdAt) / 1000;
+
     const { error: updateError } = await supabase
       .from("payments")
-      .update({ status: "confirmed", tx_id: match.transaction_hash })
+      .update({ 
+        status: "confirmed", 
+        tx_id: match.transaction_hash,
+        completion_duration_seconds: Math.floor(latencySeconds)
+      })
       .eq("id", data.id);
 
     if (updateError) {
       updateError.status = 500;
       throw updateError;
     }
+
+    // Invalidate cache
+    const redis = await connectRedisClient();
+    await invalidatePaymentCache(redis, data.id);
+
+    // Record metrics
+    paymentConfirmedCounter.inc({ asset: data.asset });
+    paymentConfirmationLatency.observe({ asset: data.asset }, latencySeconds);
 
     if (io && data.merchant_id) {
       io.to(`merchant:${data.merchant_id}`).emit("payment:confirmed", {
@@ -210,6 +292,26 @@ export const paymentService = {
 
     const webhookResult = await sendWebhook(data.webhook_url, webhookPayload, merchantSecret);
 
+    // Fire-and-forget receipt email
+    const receiptTo = data.merchants?.notification_email || data.merchants?.email;
+    if (receiptTo) {
+      const receiptHtml = renderReceiptEmail({
+        payment: { ...data, tx_id: match.transaction_hash },
+        merchant: data.merchants,
+      });
+      Promise.resolve()
+        .then(() =>
+          sendReceiptEmail({
+            to: receiptTo,
+            subject: `Payment Receipt – ${data.id}`,
+            html: receiptHtml,
+          })
+        )
+        .catch((err) => {
+          console.warn("Receipt email error", err);
+        });
+    }
+
     return {
       status: "confirmed",
       tx_id: match.transaction_hash,
@@ -218,23 +320,38 @@ export const paymentService = {
     };
   },
 
-  async getMerchantPayments(merchantId, page = 1, limit = 10) {
+  async getMerchantPayments(merchantId, queryParams) {
+    let page = parseInt(queryParams.page, 10) || 1;
+    let limit = parseInt(queryParams.limit, 10) || 10;
+
+    if (page < 1) page = 1;
+    if (limit < 1) limit = 1;
+    if (limit > 100) limit = 100;
+
     const offset = (page - 1) * limit;
 
-    const { count: totalCount, error: countError } = await supabase
+    let countQuery = supabase
       .from("payments")
       .select("*", { count: "exact", head: true })
       .eq("merchant_id", merchantId);
+
+    countQuery = applyPaymentFilters(countQuery, queryParams);
+
+    const { count: totalCount, error: countError } = await countQuery;
 
     if (countError) {
       countError.status = 500;
       throw countError;
     }
 
-    const { data: payments, error: dataError } = await supabase
+    let dataQuery = supabase
       .from("payments")
       .select("id, amount, asset, asset_issuer, recipient, description, status, tx_id, created_at")
-      .eq("merchant_id", merchantId)
+      .eq("merchant_id", merchantId);
+
+    dataQuery = applyPaymentFilters(dataQuery, queryParams);
+
+    const { data: payments, error: dataError } = await dataQuery
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 

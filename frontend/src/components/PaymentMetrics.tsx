@@ -2,16 +2,8 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import * as Recharts from "recharts";
+const { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } = Recharts;
 import toast from "react-hot-toast";
 import {
   useHydrateMerchantStore,

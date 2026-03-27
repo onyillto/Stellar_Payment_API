@@ -97,9 +97,7 @@ function createPaymentsRouter({
    */
   router.get("/payments", async (req, res, next) => {
     try {
-      const page = parseInt(req.query.page, 10) || 1;
-      const limit = parseInt(req.query.limit, 10) || 10;
-      const result = await paymentService.getMerchantPayments(req.merchant.id, page, limit);
+      const result = await paymentService.getMerchantPayments(req.merchant.id, req.query);
       res.json(result);
     } catch (err) {
       next(err);

@@ -1,4 +1,4 @@
-import { pool } from "./db.js";
+import { pool } from "../lib/db.js";
 
 /**
  * Executes a callback within a transaction where the merchant context is set.

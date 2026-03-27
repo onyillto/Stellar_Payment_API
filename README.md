@@ -83,6 +83,14 @@ API will be available at `http://localhost:4000`.
 
 Rate limiting uses Redis-backed shared state, so multiple API instances behind a load balancer enforce the same counters.
 
+Generate a static OpenAPI asset for SDK generation or external docs:
+```bash
+cd backend
+npm run build:docs
+```
+
+This writes `backend/public/openapi.json`.
+
 ## API Endpoints
 
 - `GET /health`

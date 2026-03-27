@@ -1,6 +1,10 @@
 import express from "express";
 import { requireApiKeyAuth } from "../lib/auth.js";
+<<<<<<< HEAD
 import { metricService } from "../services/metricService.js";
+=======
+import { withMerchantContext } from "./db-rls.js";
+>>>>>>> f91eadf9cdb62c1166d2a7f07c312c2c5e0a944a
 
 const router = express.Router();
 

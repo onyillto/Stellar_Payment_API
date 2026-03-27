@@ -204,3 +204,10 @@ export const webhookSettingsSchema = z.object({
 export function formatZodError(error) {
   return error.issues?.[0]?.message || "Validation error";
 }
+
+/**
+ * Helper to parse and validate payment body for session creation.
+ */
+export function parseVersionedPaymentBody(req) {
+  return paymentSessionZodSchema.parse(req.body);
+}

@@ -33,6 +33,11 @@ function getNavItems(t: ReturnType<typeof useTranslations>) {
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4M12 20v-2M4 12H2m20 0h-2M4.929 4.929l1.414 1.414m11.314 11.314l1.414 1.414M4.929 19.071l1.414-1.414m11.314-11.314l1.414-1.414" />
       </svg>
+    )},
+    { label: t.has?.("devTools") ? t("devTools") : "Dev Tools", href: "/dashboard/dev-tools", icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+      </svg>
     )}
   ];
 }
