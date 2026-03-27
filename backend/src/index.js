@@ -124,6 +124,7 @@ app.use("/api/merchant-branding", requireApiKeyAuth());
 app.use("/api/webhook-settings", requireApiKeyAuth());
 app.use("/api/regenerate-webhook-secret", requireApiKeyAuth());
 app.use("/api/audit-logs", requireApiKeyAuth());
+app.use("/api/merchants/rotate-webhook-secret", requireApiKeyAuth());
 app.use("/api", authRouter);
 app.use("/api", createPaymentsRouter({ verifyPaymentRateLimit }));
 app.use("/api", merchantsRouter);

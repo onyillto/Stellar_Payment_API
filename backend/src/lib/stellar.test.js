@@ -304,6 +304,22 @@ describe('findMatchingPayment', () => {
     expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
   })
 
+  it('matches return memo type', async () => {
+    const returnHash = 'def789abc012'
+    mockCall.mockResolvedValue({ records: [makePayment()] })
+    mockTxCall.mockResolvedValue({ memo_type: 'return', memo: returnHash })
+
+    const result = await findMatchingPayment({
+      recipient: 'GABC',
+      amount: '100',
+      assetCode: 'XLM',
+      memo: returnHash,
+      memoType: 'return'
+    })
+
+    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123' })
+  })
+
   it('skips memo check when no memo is provided', async () => {
     mockCall.mockResolvedValue({ records: [makePayment()] })
 

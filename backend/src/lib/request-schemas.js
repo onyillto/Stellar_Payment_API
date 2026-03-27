@@ -65,6 +65,11 @@ const paymentBaseSchema = z.object({
   });
 
 function applyPaymentValidationRules(body, ctx) {
+    const isValidUnsigned64BitInteger = (value) => {
+      const parsed = (() => { try { return BigInt(value); } catch { return -1n; } })();
+      return parsed >= 0n && parsed <= 18446744073709551615n && /^\d+$/.test(value);
+    };
+
     if (body.asset === "XLM" && body.amount < MINIMUM_XLM_PAYMENT_AMOUNT) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
