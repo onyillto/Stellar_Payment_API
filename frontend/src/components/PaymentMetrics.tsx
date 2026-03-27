@@ -2,9 +2,8 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -25,14 +24,26 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-interface MetricData {
+type TimeRange = "7D" | "30D" | "1Y";
+type ExportFormat = "png" | "svg";
+
+interface VolumeDataPoint {
   date: string;
-  volume: number;
-  count: number;
+  [asset: string]: number | string;
+}
+
+interface VolumeResponse {
+  range: TimeRange;
+  assets: string[];
+  data: VolumeDataPoint[];
 }
 
 interface MetricsResponse {
-  data: MetricData[];
+  data: Array<{
+    date: string;
+    volume: number;
+    count: number;
+  }>;
   total_volume: number;
   total_payments: number;
 }
@@ -40,7 +51,23 @@ interface MetricsResponse {
 const CHART_HEIGHT = 300;
 const EXPORT_SCALE = 2;
 
-type ExportFormat = "png" | "svg";
+const ASSET_COLORS: Record<string, string> = {
+  USDC: "#2775CA",
+  XLM: "#E8B84B",
+};
+
+const FALLBACK_COLORS = ["#0ea5e9", "#10b981", "#8b5cf6", "#f43f5e", "#f97316"];
+const TIME_RANGES: TimeRange[] = ["7D", "30D", "1Y"];
+
+const RANGE_LABELS: Record<TimeRange, string> = {
+  "7D": "7 Days",
+  "30D": "30 Days",
+  "1Y": "1 Year",
+};
+
+function colorForAsset(asset: string, index: number): string {
+  return ASSET_COLORS[asset] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];
+}
 
 function buildSvgMarkup(svg: SVGSVGElement): { markup: string; width: number; height: number } {
   const clone = svg.cloneNode(true) as SVGSVGElement;
@@ -136,28 +163,20 @@ async function exportChart(
 }
 
 function ChartExportButton({
-  chartId,
   containerRef,
-  exportingChart,
+  exporting,
   onExport,
 }: {
-  chartId: string;
   containerRef: RefObject<HTMLDivElement>;
-  exportingChart: string | null;
-  onExport: (
-    chartId: string,
-    format: ExportFormat,
-    containerRef: RefObject<HTMLDivElement>,
-  ) => Promise<void>;
+  exporting: boolean;
+  onExport: (format: ExportFormat, containerRef: RefObject<HTMLDivElement>) => Promise<void>;
 }) {
-  const isExporting = exportingChart === chartId;
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          disabled={isExporting}
+          disabled={exporting}
           className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300 transition-all hover:border-mint/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           <svg
@@ -179,14 +198,14 @@ function ChartExportButton({
               strokeLinejoin="round"
             />
           </svg>
-          {isExporting ? "Exporting..." : "Download Image"}
+          {exporting ? "Exporting..." : "Download Image"}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => void onExport(chartId, "png", containerRef)}>
+        <DropdownMenuItem onSelect={() => void onExport("png", containerRef)}>
           Download PNG
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void onExport(chartId, "svg", containerRef)}>
+        <DropdownMenuItem onSelect={() => void onExport("svg", containerRef)}>
           Download SVG
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -195,56 +214,97 @@ function ChartExportButton({
 }
 
 export default function PaymentMetrics() {
-  const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
+  const [summary, setSummary] = useState<MetricsResponse | null>(null);
+  const [volumeData, setVolumeData] = useState<VolumeResponse | null>(null);
+  const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(new Set());
+  const [range, setRange] = useState<TimeRange>("7D");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [exportingChart, setExportingChart] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const apiKey = useMerchantApiKey();
   const hydrated = useMerchantHydrated();
-  const volumeChartRef = useRef<HTMLDivElement>(null);
-  const countChartRef = useRef<HTMLDivElement>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
 
   useHydrateMerchantStore();
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !apiKey) return;
 
     const controller = new AbortController();
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
-    const fetchMetrics = async () => {
-      try {
-        if (!apiKey) {
-          setLoading(false);
-          return;
-        }
-
-        const apiUrl =
-          process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-        const response = await fetch(`${apiUrl}/api/metrics/7day`, {
-          headers: {
-            "x-api-key": apiKey,
-          },
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch metrics");
-        }
-
-        const data: MetricsResponse = await response.json();
-        setMetrics(data);
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === "AbortError") return;
-        setError(err instanceof Error ? err.message : "Failed to load metrics");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchMetrics();
+    fetch(`${apiUrl}/api/metrics/7day`, {
+      headers: { "x-api-key": apiKey },
+      signal: controller.signal,
+    })
+      .then((response) =>
+        response.ok ? response.json() : Promise.reject(new Error("Failed to fetch metrics")),
+      )
+      .then((data: MetricsResponse) => setSummary(data))
+      .catch((fetchError) => {
+        if (fetchError instanceof Error && fetchError.name === "AbortError") return;
+        setError(fetchError instanceof Error ? fetchError.message : "Failed to fetch metrics");
+      });
 
     return () => controller.abort();
   }, [apiKey, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated || !apiKey) {
+      setLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoading(true);
+
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+
+    fetch(`${apiUrl}/api/metrics/volume?range=${range}`, {
+      headers: { "x-api-key": apiKey },
+      signal: controller.signal,
+    })
+      .then((response) =>
+        response.ok
+          ? response.json()
+          : Promise.reject(new Error("Failed to fetch volume data")),
+      )
+      .then((data: VolumeResponse) => setVolumeData(data))
+      .catch((fetchError) => {
+        if (fetchError instanceof Error && fetchError.name === "AbortError") return;
+        setError(fetchError instanceof Error ? fetchError.message : "Failed to fetch volume data");
+      })
+      .finally(() => setLoading(false));
+
+    return () => controller.abort();
+  }, [apiKey, hydrated, range]);
+
+  const toggleAsset = (asset: string) => {
+    setHiddenAssets((prev) => {
+      const next = new Set(prev);
+      if (next.has(asset)) next.delete(asset);
+      else next.add(asset);
+      return next;
+    });
+  };
+
+  const handleExport = async (
+    format: ExportFormat,
+    containerRef: RefObject<HTMLDivElement>,
+  ) => {
+    setExporting(true);
+
+    try {
+      await exportChart(containerRef, format, `multi-asset-volume-${range.toLowerCase()}`);
+      toast.success(`Chart downloaded as ${format.toUpperCase()}`);
+    } catch (exportError) {
+      const message =
+        exportError instanceof Error ? exportError.message : "Failed to export chart.";
+      toast.error(message);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   if (loading || !hydrated) {
     return (
@@ -259,215 +319,194 @@ export default function PaymentMetrics() {
     return (
       <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-6 text-center">
         <p className="text-sm text-yellow-400">{error}</p>
+        <button
+          onClick={() => setError(null)}
+          className="mt-3 text-xs text-slate-400 underline"
+        >
+          Retry
+        </button>
       </div>
     );
   }
 
-  if (!metrics) {
-    return null;
-  }
-
-  const formattedData = metrics.data.map((d) => ({
-    ...d,
-    dateShort: new Date(d.date).toLocaleDateString("en-US", {
+  const assets = volumeData?.assets ?? [];
+  const chartData = (volumeData?.data ?? []).map((dataPoint) => ({
+    ...dataPoint,
+    dateShort: new Date(dataPoint.date).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
     }),
   }));
 
-  const handleExport = async (
-    chartId: string,
-    format: ExportFormat,
-    containerRef: RefObject<HTMLDivElement>,
-  ) => {
-    setExportingChart(chartId);
-
-    try {
-      await exportChart(containerRef, format, chartId);
-      toast.success(`Chart downloaded as ${format.toUpperCase()}`);
-    } catch (exportError) {
-      const message =
-        exportError instanceof Error ? exportError.message : "Failed to export chart.";
-      toast.error(message);
-    } finally {
-      setExportingChart(null);
-    }
-  };
-
   return (
     <div className="flex flex-col gap-6">
-      {/* Metrics Summary */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur">
-          <p className="font-mono text-xs uppercase tracking-wider text-slate-400">
-            7-Day Volume
-          </p>
-          <div className="mt-2 flex items-baseline gap-2">
-            <p className="text-3xl font-bold text-mint">
-              {metrics.total_volume.toLocaleString()}
+      {summary && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur">
+            <p className="font-mono text-xs uppercase tracking-wider text-slate-400">
+              7-Day Volume
             </p>
-            <p className="text-sm text-slate-400">XLM</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <p className="text-3xl font-bold text-mint">
+                {summary.total_volume.toLocaleString()}
+              </p>
+              <p className="text-sm text-slate-400">XLM</p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur">
+            <p className="font-mono text-xs uppercase tracking-wider text-slate-400">
+              Total Payments
+            </p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <p className="text-3xl font-bold text-mint">
+                {summary.total_payments}
+              </p>
+              <p className="text-sm text-slate-400">
+                {summary.total_payments === 1 ? "payment" : "payments"}
+              </p>
+            </div>
           </div>
         </div>
+      )}
 
-        <div className="rounded-xl border border-white/10 bg-white/5 p-4 backdrop-blur">
-          <p className="font-mono text-xs uppercase tracking-wider text-slate-400">
-            Total Payments
-          </p>
-          <div className="mt-2 flex items-baseline gap-2">
-            <p className="text-3xl font-bold text-mint">
-              {metrics.total_payments}
-            </p>
-            <p className="text-sm text-slate-400">
-              {metrics.total_payments === 1 ? "payment" : "payments"}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Chart */}
       <div
-        ref={volumeChartRef}
-        className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-6 backdrop-blur"
+        ref={chartContainerRef}
+        className="flex flex-col gap-4 rounded-xl border border-white/10 bg-white/5 p-6 backdrop-blur"
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex flex-col gap-1">
-            <h3 className="font-semibold text-white">Payment Volume (7 Days)</h3>
-            <p className="text-xs text-slate-400">Daily transaction amount</p>
-          </div>
-          <ChartExportButton
-            chartId="payment-volume-7-days"
-            containerRef={volumeChartRef}
-            exportingChart={exportingChart}
-            onExport={handleExport}
-          />
-        </div>
-
-        <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
-          <BarChart
-            data={formattedData}
-            margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
-          >
-            <defs>
-              <linearGradient id="colorVolume" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.8} />
-                <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0.1} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="#1e293b"
-              horizontal={true}
-              vertical={false}
-            />
-            <XAxis
-              dataKey="dateShort"
-              stroke="#64748b"
-              style={{ fontSize: "12px" }}
-            />
-            <YAxis
-              stroke="#64748b"
-              style={{ fontSize: "12px" }}
-              tickFormatter={(value) => value.toLocaleString()}
-            />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "#0f172a",
-                border: "1px solid #334155",
-                borderRadius: "8px",
-                padding: "8px 12px",
-              }}
-              labelStyle={{ color: "#e2e8f0", fontSize: "12px" }}
-              formatter={(value: number) => [
-                `${value.toLocaleString()} XLM`,
-                "Volume",
-              ]}
-              cursor={{ fill: "rgba(14, 165, 233, 0.1)" }}
-            />
-            <Bar
-              dataKey="volume"
-              fill="url(#colorVolume)"
-              isAnimationActive={true}
-              animationDuration={500}
-              radius={[8, 8, 0, 0]}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Payment Count Chart */}
-      <div
-        ref={countChartRef}
-        className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-6 backdrop-blur"
-      >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex flex-col gap-1">
-            <h3 className="font-semibold text-white">Payment Count (7 Days)</h3>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-white">
+              Multi-Asset Volume Comparison
+            </h3>
             <p className="text-xs text-slate-400">
-              Number of transactions per day
+              Daily transaction volume broken down by asset
             </p>
           </div>
-          <ChartExportButton
-            chartId="payment-count-7-days"
-            containerRef={countChartRef}
-            exportingChart={exportingChart}
-            onExport={handleExport}
-          />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
+              {TIME_RANGES.map((nextRange) => (
+                <button
+                  key={nextRange}
+                  onClick={() => setRange(nextRange)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                    range === nextRange
+                      ? "bg-white/10 text-white"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                  aria-pressed={range === nextRange}
+                  aria-label={`Show ${RANGE_LABELS[nextRange]}`}
+                >
+                  {nextRange}
+                </button>
+              ))}
+            </div>
+
+            {assets.length > 0 && (
+              <ChartExportButton
+                containerRef={chartContainerRef}
+                exporting={exporting}
+                onExport={handleExport}
+              />
+            )}
+          </div>
         </div>
 
-        <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
-          <LineChart
-            data={formattedData}
-            margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+        {assets.length > 0 && (
+          <div
+            className="flex flex-wrap gap-2"
+            role="group"
+            aria-label="Toggle asset visibility"
           >
-            <defs>
-              <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
-                <stop offset="95%" stopColor="#10b981" stopOpacity={0.1} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="#1e293b"
-              horizontal={true}
-              vertical={false}
-            />
-            <XAxis
-              dataKey="dateShort"
-              stroke="#64748b"
-              style={{ fontSize: "12px" }}
-            />
-            <YAxis
-              stroke="#64748b"
-              style={{ fontSize: "12px" }}
-              allowDecimals={false}
-            />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "#0f172a",
-                border: "1px solid #334155",
-                borderRadius: "8px",
-                padding: "8px 12px",
-              }}
-              labelStyle={{ color: "#e2e8f0", fontSize: "12px" }}
-              formatter={(value: number) => [
-                value.toLocaleString(),
-                "Payments",
-              ]}
-              cursor={{ stroke: "#10b981", strokeWidth: 2 }}
-            />
-            <Line
-              type="monotone"
-              dataKey="count"
-              stroke="#10b981"
-              strokeWidth={2}
-              dot={{ fill: "#10b981", r: 4 }}
-              activeDot={{ r: 6 }}
-              isAnimationActive={true}
-              animationDuration={500}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+            {assets.map((asset, index) => {
+              const color = colorForAsset(asset, index);
+              const hidden = hiddenAssets.has(asset);
+
+              return (
+                <button
+                  key={asset}
+                  onClick={() => toggleAsset(asset)}
+                  className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-opacity ${
+                    hidden ? "opacity-40" : "opacity-100"
+                  }`}
+                  style={{ borderColor: color, color }}
+                  aria-pressed={!hidden}
+                  aria-label={`${hidden ? "Show" : "Hide"} ${asset}`}
+                >
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{
+                      backgroundColor: hidden ? "transparent" : color,
+                      border: `1px solid ${color}`,
+                    }}
+                  />
+                  {asset}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {assets.length === 0 ? (
+          <p className="py-12 text-center text-sm text-slate-500">
+            No completed payments in this period.
+          </p>
+        ) : (
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+            <LineChart
+              data={chartData}
+              margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+            >
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="#1e293b"
+                horizontal
+                vertical={false}
+              />
+              <XAxis
+                dataKey="dateShort"
+                stroke="#64748b"
+                style={{ fontSize: "12px" }}
+              />
+              <YAxis
+                stroke="#64748b"
+                style={{ fontSize: "12px" }}
+                tickFormatter={(value) => value.toLocaleString()}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#0f172a",
+                  border: "1px solid #334155",
+                  borderRadius: "8px",
+                  padding: "8px 12px",
+                }}
+                labelStyle={{ color: "#e2e8f0", fontSize: "12px" }}
+                formatter={(value: number, name: string) => [
+                  `${value.toLocaleString()} ${name}`,
+                  name,
+                ]}
+              />
+              <Legend wrapperStyle={{ display: "none" }} />
+              {assets.map((asset, index) =>
+                hiddenAssets.has(asset) ? null : (
+                  <Line
+                    key={asset}
+                    type="monotone"
+                    dataKey={asset}
+                    name={asset}
+                    stroke={colorForAsset(asset, index)}
+                    strokeWidth={2}
+                    dot={{ fill: colorForAsset(asset, index), r: 3 }}
+                    activeDot={{ r: 5 }}
+                    isAnimationActive
+                    animationDuration={400}
+                  />
+                ),
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );
