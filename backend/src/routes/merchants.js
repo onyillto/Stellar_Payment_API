@@ -2,6 +2,8 @@ import express from "express";
 import { randomBytes } from "crypto";
 import { z } from "zod";
 import { supabase } from "../lib/supabase.js";
+import { requireApiKeyAuth } from "../lib/auth.js";
+import { getMerchantApiUsage } from "../lib/api-usage.js";
 import {
   merchantProfileUpdateZodSchema,
   registerMerchantZodSchema,
@@ -425,6 +427,51 @@ router.put("/merchant-limits", async (req, res, next) => {
     }
 
     res.json({ payment_limits: data.payment_limits });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @swagger
+ * /api/merchants/usage:
+ *   get:
+ *     summary: Get API usage metrics for the authenticated merchant
+ *     tags: [Merchants]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         required: false
+ *         schema:
+ *           type: string
+ *           pattern: '^\\d{4}-(0[1-9]|1[0-2])$'
+ *         description: Optional month in YYYY-MM format
+ *     responses:
+ *       200:
+ *         description: Usage grouped by endpoint and month
+ *       400:
+ *         description: Invalid month query parameter
+ *       401:
+ *         description: Missing or invalid API key
+ */
+router.get("/merchants/usage", requireApiKeyAuth(), async (req, res, next) => {
+  try {
+    const month = typeof req.query?.month === "string" ? req.query.month : undefined;
+
+    if (month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      return res.status(400).json({
+        error: "month must be in YYYY-MM format",
+      });
+    }
+
+    const usage = await getMerchantApiUsage({
+      merchantId: req.merchant.id,
+      month,
+    });
+
+    res.json(usage);
   } catch (err) {
     next(err);
   }
