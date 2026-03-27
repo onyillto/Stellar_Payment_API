@@ -6,6 +6,7 @@ import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
 import paymentsRouter from "./routes/payments.js";
 import merchantsRouter from "./routes/merchants.js";
+import webhooksRouter from "./routes/webhooks.js";
 import { requireApiKeyAuth } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { validateEnvironmentVariables } from "./lib/env-validation.js";
@@ -73,8 +74,10 @@ app.get("/health", async (req, res) => {
 
 app.use("/api/create-payment", requireApiKeyAuth());
 app.use("/api/rotate-key", requireApiKeyAuth());
+app.use("/api/webhooks/logs", requireApiKeyAuth());
 app.use("/api", paymentsRouter);
 app.use("/api", merchantsRouter);
+app.use("/api", webhooksRouter);
 
 app.use((err, req, res, next) => {
   const status = err.status || 500;

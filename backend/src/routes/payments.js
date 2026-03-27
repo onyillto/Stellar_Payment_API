@@ -311,7 +311,7 @@ router.post("/verify-payment/:id", verifyPaymentRateLimit, async (req, res, next
       asset_issuer: data.asset_issuer,
       recipient: data.recipient,
       tx_id: match.transaction_hash
-    }, merchantSecret);
+    }, merchantSecret, data.id);
 
     if (!webhookResult.ok && !webhookResult.skipped) {
       console.warn("Webhook failed", webhookResult);
