@@ -49,28 +49,7 @@ export default function Sidebar() {
   const navItems = getNavItems(t);
 
   return (
-    <>
-      {/* Mobile Bottom Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 flex h-16 border-t border-white/10 bg-black/80 backdrop-blur-md lg:hidden">
-        {navItems.map((item) => {
-          const isActive = pathname === item.href;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex flex-1 flex-col items-center justify-center gap-1 transition-colors ${
-                isActive ? "text-mint font-medium" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              {item.icon}
-              <span className="text-[10px] uppercase tracking-wider">{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* Desktop Sidebar */}
-      <motion.aside
+    <motion.aside
         initial={false}
         animate={{ width: isCollapsed ? "80px" : "260px" }}
         className="fixed left-0 top-0 bottom-0 z-50 hidden flex-col border-r border-white/10 bg-black/40 backdrop-blur-xl lg:flex"
@@ -120,7 +99,6 @@ export default function Sidebar() {
             </div>
           </div>
         </div>
-      </motion.aside>
-    </>
+    </motion.aside>
   );
 }
